@@ -1,0 +1,45 @@
+name: php-cs-fixer
+description: "Run PHP CS Fixer with configurable rules and mode"
+branding:
+  color: "blue"
+  icon: "check"
+
+inputs:
+  path:
+    required: false
+    default: "."
+    description: "Directory to run php-cs-fixer in"
+
+  rules:
+    required: false
+    default: "@PER-CS2.0,no_unused_imports"
+    description: "Rules for php-cs-fixer"
+
+  mode:
+    required: false
+    default: "check"
+    description: "'check' to only report issues, 'fix' to apply them"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: 8.2
+        tools: php-cs-fixer:3.63.2, cs2pr
+
+    - name: Run PHP CS Fixer
+      shell: bash
+      run: |
+        RULES=""
+        [[ -n "${{ inputs.rules }}" ]] && RULES="--rules=${{ inputs.rules }}"
+
+        if [[ "${{ inputs.mode }}" == "check" ]]; then
+          php-cs-fixer fix "${{ inputs.path }}" --dry-run $RULES --format=checkstyle | cs2pr
+        else
+          php-cs-fixer fix "${{ inputs.path }}" $RULES
+        fi

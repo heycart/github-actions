@@ -1,0 +1,77 @@
+name: versions
+description: "Get the first and latest versions of the current and previous (LTS) major"
+branding:
+  color: "purple"
+  icon: "check-circle"
+
+inputs:
+  major:
+    description: Current major prefix like v6.6.
+    default: v6.7.
+  lts-major:
+    description: LTS major prefix like v6.5.
+    default: v6.6.
+
+outputs:
+  first-version:
+    description: The first version of the current major
+    value: ${{ steps.get-versions.outputs.CUR_MAJOR_MIN_TAG }}
+  latest-version:
+    description: The latest version of the current major
+    value: ${{ steps.get-versions.outputs.CUR_MAJOR_MAX_TAG }}
+  lts-first-version:
+    description: The first version of the lts major
+    value: ${{ steps.get-versions.outputs.PREV_MAJOR_MIN_TAG }}
+  lts-latest-version:
+    description: The latest version of the lts major
+    value: ${{ steps.get-versions.outputs.PREV_MAJOR_MAX_TAG }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: get-versions
+      uses: actions/github-script@v7
+      env:
+        CUR_MAJOR: ${{ inputs.major }}
+        PREV_MAJOR: ${{ inputs.lts-major }}
+      with:
+        script: |
+          const curMajor = `v${process.env.CUR_MAJOR.replace(/^v/, '')}`;
+          const prevMajor = `v${process.env.PREV_MAJOR.replace(/^v/, '')}`;
+
+          const { data: tags } = await github.rest.repos.listTags({
+            owner: 'heycart',
+            repo: 'heycart',
+            per_page: 100, // max per page
+          });
+
+          function getMinMax(majorPrefix) {
+            const filtered = tags
+              .map(tag => tag.name)
+              .filter(name => name.startsWith(majorPrefix))
+              .filter(name => !/rc/i.test(name)) // remove rc versions
+              .sort((a, b) => {
+                const parse = v => v.replace(/^v/, '').split('.').map(Number);
+                const [a1, a2, a3] = parse(a);
+                const [b1, b2, b3] = parse(b);
+                return a1 - b1 || a2 - b2 || a3 - b3;
+              });
+
+            if (filtered.length === 0) {
+              core.warning(`No stable tags found for prefix ${majorPrefix}`);
+              return { min: '', max: '' };
+            }
+
+            return {
+              min: filtered[0],
+              max: filtered[filtered.length - 1],
+            };
+          }
+
+          const cur = getMinMax(curMajor);
+          const prev = getMinMax(prevMajor);
+
+          core.setOutput('CUR_MAJOR_MIN_TAG', cur.min);
+          core.setOutput('CUR_MAJOR_MAX_TAG', cur.max);
+          core.setOutput('PREV_MAJOR_MIN_TAG', prev.min);
+          core.setOutput('PREV_MAJOR_MAX_TAG', prev.max);

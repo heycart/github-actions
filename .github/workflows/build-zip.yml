@@ -1,0 +1,32 @@
+name: Build HeyCart Extension Zip
+on:
+  workflow_call:
+    inputs:
+      extensionName:
+        description: "Extension name"
+        required: true
+        type: string
+      path:
+        description: "Path to your bundle"
+        required: false
+        type: string
+        default: "."
+jobs:
+  run:
+    name: Build and Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install heycart-cli
+        uses: heycart/heycart-cli-action@v1
+      - name: Build
+        run: heycart-cli extension zip "${{ inputs.path }}" --git-commit "${{ github.sha }}"
+      - name: Rename
+        run: mv ${{ inputs.extensionName }}-${{ github.sha }}.zip ${{ inputs.extensionName }}.zip
+      - name: Validate
+        run: heycart-cli extension validate ${{ inputs.extensionName }}.zip
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.extensionName }}
+          path: ${{ inputs.extensionName }}.zip

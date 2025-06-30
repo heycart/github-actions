@@ -1,0 +1,79 @@
+name: "Build HeyCart Extension Zip"
+description: "Builds a HeyCart extension and uploads a validated ZIP artifact"
+branding:
+  color: "purple"
+  icon: "check-circle"
+
+inputs:
+  extensionName:
+    description: "Your extension name"
+    required: true
+
+  path:
+    description: "Path to your extension root"
+    required: false
+    default: "."
+
+  skipCheckout:
+    description: "Skip the checkout step"
+    required: false
+    default: 'false'
+
+  skipValidate:
+    description: "Skip the HeyCart extension validation"
+    required: false
+    default: 'false'
+
+  zipName:
+    description: "Custom name for the zip file (without .zip)"
+    required: false
+    default: ""
+
+outputs:
+  artifact-id:
+    description: A unique identifier for the uploaded artifact
+    value: ${{ steps.upload.outputs.artifact-id }}
+
+  artifact-url:
+    description: A download URL for the uploaded artifact
+    value: ${{ steps.upload.outputs.artifact-url }}
+
+  zip-file:
+    description: The final ZIP file name
+    value: ${{ steps.rename.outputs.zip-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+      if: inputs.skipCheckout == 'false'
+
+    - name: Install heycart-cli
+      uses: heycart/heycart-cli-action@v1
+
+    - name: Build extension zip
+      shell: bash
+      run: heycart-cli extension zip "${{ inputs.path }}" --git-commit "${{ github.sha }}"
+
+    - name: Rename zip
+      id: rename
+      shell: bash
+      run: |
+        ZIP_NAME="${{ inputs.zipName }}"
+        if [[ -z "$ZIP_NAME" ]]; then
+          ZIP_NAME="${{ inputs.extensionName }}"
+        fi
+        mv "${{ inputs.extensionName }}-${{ github.sha }}.zip" "$ZIP_NAME.zip"
+        echo "zip-file=$ZIP_NAME.zip" >> "$GITHUB_OUTPUT"
+
+    - name: Validate extension
+      if: inputs.skipValidate != 'true'
+      shell: bash
+      run: heycart-cli extension validate "${{ steps.rename.outputs.zip-file }}"
+
+    - name: Upload ZIP artifact
+      uses: actions/upload-artifact@v4
+      id: upload
+      with:
+        name: ${{ steps.rename.outputs.zip-file }}
+        path: ${{ steps.rename.outputs.zip-file }}

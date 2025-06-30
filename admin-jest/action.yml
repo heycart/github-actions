@@ -1,0 +1,54 @@
+name: "Admin Jest Tests"
+description: "Run Jest tests for HeyCart Admin extensions with optional Codecov upload"
+branding:
+  color: "purple"
+  icon: "check-circle"
+
+inputs:
+  extensionName:
+    description: "Name of your HeyCart extension"
+    required: true
+
+  testCommand:
+    description: "Custom test command to run"
+    required: false
+    default: "npm run unit -- --coverage"
+
+  testDirectory:
+    description: "Path to test directory inside extension"
+    required: false
+    default: "src/Resources/app/administration"
+
+  rootDirectory:
+    description: "Root directory for Codecov upload"
+    required: false
+    default: "."
+
+  uploadCoverage:
+    description: "Whether to upload coverage to Codecov"
+    required: false
+    default: "false"
+
+outputs:
+  coverage-file:
+    description: "Path to generated coverage file"
+    value: ${{ steps.test.outputs.coverage-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run Jest tests
+      id: test
+      shell: bash
+      working-directory: custom/plugins/${{ inputs.extensionName }}/${{ inputs.testDirectory }}
+      run: |
+        ${{ inputs.testCommand }}
+        echo "coverage-file=$(pwd)/coverage/coverage-final.json" >> "$GITHUB_OUTPUT"
+
+    - name: Upload coverage to Codecov
+      if: inputs.uploadCoverage == 'true'
+      uses: codecov/codecov-action@v4
+      with:
+        root_dir: ${{ github.workspace }}/custom/plugins/${{ inputs.extensionName }}/${{ inputs.rootDirectory }}
+        working-directory: ${{ github.workspace }}/custom/plugins/${{ inputs.extensionName }}/${{ inputs.rootDirectory }}
+        directory: ${{ github.workspace }}/custom/plugins/${{ inputs.extensionName }}/${{ inputs.testDirectory }}

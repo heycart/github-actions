@@ -1,0 +1,68 @@
+name: "PHPStan"
+description: "Run PHPStan for Shopware extension"
+branding:
+  color: "purple"
+  icon: "check-circle"
+
+inputs:
+  extensionName:
+    description: "Your extension name"
+    required: true
+
+  cacheDir:
+    description: PHPStan cache dir
+    default: ${{ github.workspace }}/var/phpstan
+
+  useCustomConfig:
+    description: Whether to generate phpstan.neon automatically
+    default: "true"
+    required: false
+
+  configPath:
+    description: "Custom phpstan.neon path (if useCustomConfig is false)"
+    required: false
+    default: ""
+
+  phpstanPath:
+    description: "Path to PHPStan binary"
+    required: false
+    default: ${{ github.workspace }}/vendor/bin/phpstan
+
+  analyzePath:
+    description: "Relative path to analyze inside plugin"
+    required: false
+    default: "src"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Generate phpstan.neon if needed
+      shell: bash
+      working-directory: custom/plugins/${{ inputs.extensionName }}
+      run: |
+        if [[ "${{ inputs.useCustomConfig }}" == "true" ]]; then
+          printf "parameters:\n  tmpDir: ${{ inputs.cacheDir }}\nincludes:\n  - phpstan.neon.dist" > phpstan.neon
+        elif [[ -n "${{ inputs.configPath }}" ]]; then
+          echo "Using custom config: ${{ inputs.configPath }}"
+        else
+          echo "❌ No phpstan config available. Exiting."
+          exit 1
+        fi
+
+    - name: Cache PHPStan results
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.cacheDir }}
+        key: ${{ runner.OS }}-${{ github.repository }}-phpstan-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.OS }}-${{ github.repository }}-phpstan-
+
+    - name: Build PHPStan Bootstrap
+      shell: bash
+      run: php ${GITHUB_WORKSPACE}/src/Core/DevOps/StaticAnalyze/phpstan-bootstrap.php
+
+    - name: Run PHPStan
+      shell: bash
+      working-directory: custom/plugins/${{ inputs.extensionName }}
+      run: |
+        ${{ inputs.phpstanPath }} analyze ${{ inputs.analyzePath }} --error-format=github --no-progress

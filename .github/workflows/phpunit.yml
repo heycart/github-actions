@@ -1,0 +1,114 @@
+name: PHPUnit
+on:
+  workflow_call:
+    inputs:
+      extensionName:
+        description: "Your extension name"
+        required: true
+        type: string
+      heycartVersion:
+        required: false
+        type: string
+        default: ".auto"
+      heycartVersionFallback:
+        required: false
+        type: string
+        default: trunk
+      phpVersion:
+        required: false
+        type: string
+        default: "8.2"
+      mysqlVersion:
+        required: false
+        type: string
+        default: "builtin"
+      heycart-repository:
+        description: The heycart repository to checkout
+        type: string
+        default: heycart/heycart
+      composerRootVersion:
+        required: false
+        type: string
+        default: ".auto"
+      dependencies:
+        required: false
+        type: string
+      uploadCoverage:
+        description: "Upload coverage to codecov"
+        required: false
+        type: boolean
+        default: false
+      runner:
+        required: false
+        type: string
+        default: ubuntu-latest
+      filterName:
+        description: "PHPUnit 11 requires a testsuite filter"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      codecovToken:
+        description: "Codecov token"
+        required: false
+      env:
+        description: "ENV variables to substitute in to plugin repository urls"
+        required: false
+
+jobs:
+  run:
+    name: Tests
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: heycart/github-actions/heycart-version@main
+        with:
+          fallback: ${{ inputs.heycartVersionFallback }}
+          repo: ${{ inputs.heycart-repository }}
+        id: version
+        if: ${{ inputs.heycartVersion == '.auto' || inputs.heycartVersion == '' }}
+      - name: Setup Shopware
+        uses: heycart/setup-heycart@main
+        with:
+          heycart-version: ${{ steps.version.outputs.heycart-version || inputs.heycartVersion }}
+          heycart-repository: ${{ inputs.heycart-repository }}
+          php-version: ${{ inputs.phpVersion }}
+          mysql-version: ${{ inputs.mysqlVersion }}
+          composer-root-version: ${{ inputs.composerRootVersion }}
+          php-extensions: pcov
+      - name: Clone Extension
+        uses: actions/checkout@v4
+        with:
+          path: custom/plugins/${{ inputs.extensionName }}
+      - name: Clone Dependencies
+        if: inputs.dependencies
+        env:
+          DEPS: ${{ inputs.dependencies }}
+        run: |
+          IFS=$'\n'
+          for token in $(echo "${{secrets.env}}"); do
+            export $token
+          done
+          for dep in $(echo "$DEPS" | envsubst | jq -c '.[]'); do
+            dep_name=$(echo "$dep" | jq -r '.name')
+            dep_repo=$(echo "$dep" | jq -r '.repo')
+            git clone "$dep_repo" "custom/plugins/$dep_name"
+          done
+      - name: Install extension with Composer
+        run: composer require $(composer -d custom/plugins/${{ inputs.extensionName }} config name)
+      - name: Run PHPUnit
+        working-directory: custom/plugins/${{ inputs.extensionName }}
+        run: |
+          if [ -n "${{ inputs.filterName }}" ]; then
+            ${{ github.workspace }}/vendor/bin/phpunit --testsuite ${{ inputs.filterName }} --coverage-clover clover.xml
+          else
+            ${{ github.workspace }}/vendor/bin/phpunit --coverage-clover clover.xml
+          fi
+      - name: Upload Coverage
+        if: inputs.uploadCoverage == true
+        uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.codecovToken }}
+        with:
+          root_dir: ${{ github.workspace }}/custom/plugins/${{ inputs.extensionName }}
+          working-directory: ${{ github.workspace }}/custom/plugins/${{ inputs.extensionName }}
+          files: ./clover.xml

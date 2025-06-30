@@ -1,0 +1,343 @@
+name: "Extension Bootstrap"
+description: >
+  Bootstrap HeyCart environment and install an extension (plugin or app).
+  Supports optional dependencies installation, composer/npm setup,
+  extension type auto-detection, and activation.
+
+branding:
+  color: "purple"
+  icon: "check-circle"
+
+inputs:
+  extensionName:
+    description: "Technical name of your extension (plugin or app)"
+    required: true
+
+  extensionRef:
+    description: "Git reference to checkout (branch/tag/commit)"
+    required: false
+
+  heycartVersion:
+    description: |
+      HeyCart core version to use.
+      Defaults to '.auto' to detect matching version automatically.
+    required: false
+    default: ".auto"
+
+  heycartVersionFallback:
+    description: "Fallback version if no matching ref found"
+    required: false
+    default: "trunk"
+
+  heycartRepository:
+    description: "HeyCart repository to checkout"
+    required: false
+    default: "heycart/heycart"
+
+  heycartGithubToken:
+    description: "GitHub token to access HeyCart repo"
+    required: false
+    default: ${{ github.token }}
+
+  phpVersion:
+    description: "PHP version to use"
+    required: false
+    default: "8.2"
+
+  mysqlVersion:
+    description: "MySQL version or 'builtin'"
+    required: false
+    default: "builtin"
+
+  nodeVersion:
+    description: "Node.js version to use"
+    required: false
+    default: "22.x"
+
+  npmVersion:
+    description: "npm version to use (optional)"
+    required: false
+    default: ""
+
+  composerRootVersion:
+    description: "COMPOSER_ROOT_VERSION environment variable"
+    required: false
+    default: ".auto"
+
+  dependencies:
+    description: "JSON array of dependencies to clone and install"
+    required: false
+    default: "[]"
+
+  extraRepositories:
+    description: |
+      Additional composer repositories as JSON object.
+      Example:
+        {
+          "customRepo": {
+            "type": "vcs",
+            "url": "https://my-custom-repo.example.test/foo/bar.git"
+          }
+        }
+    required: false
+    default: "{}"
+
+  install:
+    description: "Whether to run installation steps (plugin/app activation, dependency install)"
+    required: false
+    default: ""
+
+  installAdmin:
+    description: "Whether to install administration npm dependencies"
+    required: false
+    default: ""
+
+  installStorefront:
+    description: "Whether to install storefront npm dependencies"
+    required: false
+    default: ""
+
+  env:
+    description: "Environment (e.g. test, prod)"
+    required: false
+    default: "test"
+
+  keepComposerTools:
+    description: "Keep HeyCart dev tools (PHPStan, ECS, BC-Checker)"
+    required: false
+    default: "false"
+
+  extensionZip:
+    description: "Optional extension artifact zip name to download instead of git clone"
+    required: false
+
+  withSubmodules:
+    description: "Whether to checkout with git submodules"
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+
+    - uses: heycart/github-actions/heycart-version@main
+      if: ${{ inputs.heycartVersion == '.auto' || inputs.heycartVersion == '' }}
+      with:
+        fallback: ${{ inputs.heycartVersionFallback }}
+        repo: ${{ inputs.heycartRepository }}
+        heycart-github-token: ${{ inputs.heycartGithubToken }}
+      id: version
+
+    # Step 2: Setup heycart core environment
+    - name: Setup HeyCart Core Environment
+      uses: heycart/setup-heycart@main
+      with:
+        heycart-version: ${{ steps.version.outputs.heycart-version || inputs.heycartVersion }}
+        heycart-repository: ${{ inputs.heycartRepository }}
+        heycart-github-token: ${{ inputs.heycartGithubToken }}
+        php-version: ${{ inputs.phpVersion }}
+        mysql-version: ${{ inputs.mysqlVersion }}
+        node-version: ${{ inputs.nodeVersion }}
+        npm-version: ${{ inputs.npmVersion }}
+        composer-root-version: ${{ inputs.composerRootVersion }}
+        install: ${{ inputs.install }}
+        install-admin: ${{ inputs.installAdmin }}
+        install-storefront: ${{ inputs.installStorefront }}
+        keep-composer-tools: ${{ inputs.keepComposerTools }}
+        env: ${{ inputs.env }}
+
+    # Step 3: Checkout or download extension (plugin or app)
+    - name: Checkout Extension from Git
+      if: ${{ ! inputs.extensionZip }}
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.extensionRef || github.ref }}
+        path: custom/plugins/${{ inputs.extensionName }}
+        submodules: ${{ inputs.withSubmodules == 'false' && false || 'recursive' }}
+
+    - name: Download extension artifact zip
+      if: ${{ inputs.extensionZip }}
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.extensionZip }}
+        path: custom/plugins/${{ inputs.extensionName }}
+
+    - name: Extract extension zip if needed
+      if: ${{ inputs.extensionZip }}
+      shell: bash
+      run: |
+        unzip -o "custom/plugins/${{ inputs.extensionName }}/*.zip" -d "custom/plugins/${{ inputs.extensionName }}"
+        rm -f "custom/plugins/${{ inputs.extensionName }}/*.zip"
+
+    # Step 4: Determine extension type (plugin or app)
+    - name: Detect Extension Type
+      id: detect-type
+      shell: bash
+      run: |
+        IS_PLUGIN=false
+        IS_APP=false
+        if [ -f "custom/plugins/${{ inputs.extensionName }}/composer.json" ]; then
+          IS_PLUGIN=true
+        fi
+        if [ -f "custom/plugins/${{ inputs.extensionName }}/manifest.xml" ]; then
+          IS_APP=true
+        fi
+
+        echo "IS_PLUGIN=$IS_PLUGIN" >> $GITHUB_ENV
+        echo "IS_APP=$IS_APP" >> $GITHUB_ENV
+
+        if [[ "$IS_PLUGIN" == "false" && "$IS_APP" == "false" ]]; then
+          echo "Extension is neither a plugin nor an app. Please check your extension folder."
+          ls -lah "custom/plugins/${{ inputs.extensionName }}"
+          exit 1
+        fi
+
+    # Step 5: Move extension to apps folder if it's an app
+    - name: Move App to custom/apps if applicable
+      if: ${{ env.IS_APP == 'true' }}
+      shell: bash
+      run: |
+        mkdir -p custom/apps
+        mv "custom/plugins/${{ inputs.extensionName }}" "custom/apps/${{ inputs.extensionName }}"
+
+    # Step 6: Adjust composer.json for plugins: add extra repos & PSR-4 autoload-dev
+    - name: Configure Composer for Plugin
+      if: ${{ env.IS_PLUGIN == 'true' }}
+      shell: bash
+      run: |
+        composer config prefer-stable true
+        composer config minimum-stability dev
+
+        # Load plugin composer.json autoload-dev psr-4 and prefix paths
+        AUTOLOAD_DEV=$(jq '."autoload-dev"."psr-4" | to_entries | map({"key": .key, "value": "custom/plugins/${{ inputs.extensionName }}/\(.value)"}) | from_entries' < "custom/plugins/${{ inputs.extensionName }}/composer.json")
+
+        # Merge main composer.json with extraRepositories and updated autoload-dev
+        jq -s '.[0] * {"repositories": .[1]} * {"autoload-dev": {"psr-4": .[2]}}' composer.json <(echo '${{ inputs.extraRepositories }}') <(echo "$AUTOLOAD_DEV") > composer.json.new
+        mv composer.json.new composer.json
+
+    # Step 7: Clone dependencies (extra plugins) if specified
+    - name: Clone Dependencies
+      if: ${{ inputs.dependencies != '[]' }}
+      shell: bash
+      env:
+        DEPS: ${{ inputs.dependencies }}
+      run: |
+        for dep in $(echo "$DEPS" | jq -c '.[]'); do
+          dep_name=$(echo "$dep" | jq -r '.name')
+          dep_repo=$(echo "$dep" | jq -r '.repo')
+          dep_branch=$(echo "$dep" | jq -r '.branch // empty')
+          dep_token=$(echo "$dep" | jq -r '.token // empty')
+
+          echo "Cloning dependency $dep_name from $dep_repo"
+
+          if [[ -n "$dep_token" ]]; then
+            git clone -c "http.${dep_repo}/.extraheader=AUTHORIZATION: basic $(echo -n "x-access-token:$dep_token" | base64)" "$dep_repo" "custom/plugins/$dep_name"
+          else
+            git clone "$dep_repo" "custom/plugins/$dep_name"
+          fi
+
+          if [[ -n "$dep_branch" ]]; then
+            git -C "custom/plugins/$dep_name" checkout "$dep_branch"
+          fi
+        done
+
+    # Step 8: Require dependency packages with composer if plugin
+    - name: Install dependencies via Composer
+      if: ${{ inputs.dependencies != '[]' && env.IS_PLUGIN == 'true' }}
+      shell: bash
+      env:
+        DEPS: ${{ inputs.dependencies }}
+      run: |
+        IFS=$'\n'
+        for dep in $(echo "$DEPS" | jq -c '.[]'); do
+          dep_name=$(echo "$dep" | jq -r '.name')
+          dep_package_name=$(composer -d "custom/plugins/$dep_name" config name)
+          echo "Requiring $dep_package_name"
+          composer require "$dep_package_name"
+        done
+
+    # Step 9: Require main extension package with composer if plugin
+    - name: Install extension via Composer
+      if: ${{ env.IS_PLUGIN == 'true' }}
+      shell: bash
+      run: |
+        ext_package_name=$(composer -d "custom/plugins/${{ inputs.extensionName }}" config name)
+        echo "Requiring extension package $ext_package_name"
+        composer require "$ext_package_name"
+
+    # Step 10: Refresh plugins if requested
+    - name: Refresh plugins
+      if: ${{ inputs.install && env.IS_PLUGIN == 'true' }}
+      shell: bash
+      run: php bin/console plugin:refresh
+
+    # Step 11: Install dependencies plugins (the extra dependencies) if requested
+    - name: Install dependency plugins
+      if: ${{ inputs.install && inputs.dependencies != '[]' && env.IS_PLUGIN == 'true' }}
+      shell: bash
+      env:
+        DEPS: ${{ inputs.dependencies }}
+      run: |
+        for dep in $(echo "$DEPS" | jq -c '.[]'); do
+          dep_name=$(echo "$dep" | jq -r '.name')
+          echo "Installing and activating dependency plugin $dep_name"
+          php bin/console plugin:install --activate "$dep_name"
+        done
+
+    # Step 12: Install and activate main plugin
+    - name: Install and activate extension plugin
+      if: ${{ inputs.install && env.IS_PLUGIN == 'true' }}
+      shell: bash
+      run: php bin/console plugin:install --activate ${{ inputs.extensionName }}
+
+    # Step 13: Install app if detected and install requested
+    - name: Install app
+      if: ${{ inputs.install && env.IS_APP == 'true' }}
+      shell: bash
+      run: php bin/console app:refresh -n -a ${{ inputs.extensionName }}
+
+    # Step 14: Install admin npm dependencies if requested
+    - name: Install Admin Dependencies
+      if: ${{ inputs.installAdmin }}
+      shell: bash
+      run: |
+        ADMIN_DIR="custom/plugins/${{ inputs.extensionName }}/src/Resources/app/administration"
+        if [[ -f "$ADMIN_DIR/package.json" ]]; then
+          cd "$ADMIN_DIR"
+          npm ci --no-audit --no-fund --prefer-offline
+        else
+          echo "No administration package.json found, skipping."
+        fi
+
+    # Step 15: Prepare Jest environment if admin installed
+    - name: Prepare Jest Environment
+      if: ${{ inputs.install && inputs.installAdmin }}
+      shell: bash
+      working-directory: src/Administration/Resources/app/administration
+      run: npm run unit-setup --if-present
+
+    # Step 16: Install storefront npm dependencies if requested
+    - name: Install Storefront Dependencies
+      if: ${{ inputs.installStorefront }}
+      shell: bash
+      run: |
+        STORE_DIR="custom/plugins/${{ inputs.extensionName }}/src/Resources/app/storefront"
+        if [[ -f "$STORE_DIR/package.json" ]]; then
+          cd "$STORE_DIR"
+          npm ci --no-audit --no-fund --prefer-offline
+        else
+          echo "No storefront package.json found, skipping."
+        fi
+
+    # Step 17: Install storefront npm dependencies for platform storefront if requested
+    - name: Install Platform Storefront Dependencies
+      if: ${{ inputs.installStorefront }}
+      shell: bash
+      working-directory: src/Storefront/Resources/app/storefront
+      run: npm ci --no-audit --no-fund --prefer-offline
+
+    # Step 18: Generate entity schema types if admin installed
+    - name: Generate Entity Schema Types
+      if: ${{ inputs.install && inputs.installAdmin }}
+      shell: bash
+      run: composer admin:generate-entity-schema-types

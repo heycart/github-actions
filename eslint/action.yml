@@ -1,0 +1,89 @@
+name: ESLint
+description: "Run eslint for HeyCart administration projects"
+branding:
+  color: "purple"
+  icon: "check-circle"
+
+inputs:
+  extensionName:
+    description: "Your extension name"
+    required: true
+  projectPath:
+    description: "Path to the js project to be linted. Checks the administartion app by default"
+    default: src/Resources/app/administration
+  npmLintCmd:
+    description: "The npm command to run"
+    default: lint
+  heycartVersion:
+    description: |
+      With the default `.auto`, the workflow tries to find a heycart version using the heycart-version action.
+
+      For example, if the current ref is next-1234, it will try to find the ref next-1234 in heycart/heycart. If there's no matching ref, it will use heycartVersionFallback
+    required: false
+    default: ".auto"
+  heycartVersionFallback:
+    description: Fallback version in case there's no matching branch
+    required: false
+    default: trunk
+  heycart-repository:
+    description: The heycart repository to checkout
+    required: true
+    default: heycart/heycart
+  heycart-github-token:
+    description: Token used for checking out the heycart repository
+    required: true
+    default: ${{ github.token }}
+  forceInstallAdminDeps:
+    description: Install platform admin deps
+    default: ""
+    required: false
+  forceInstallStorefrontDeps:
+    description: Install platform storefront deps
+    default: ""
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+    - uses: heycart/github-actions/heycart-version@main
+      with:
+        fallback: ${{ inputs.heycartVersionFallback }}
+        repo: ${{ inputs.heycart-repository }}
+        heycart-github-token: ${{ inputs.heycart-github-token }}
+      id: version
+      if: ${{ inputs.heycartVersion == '.auto' || inputs.heycartVersion == '' }}
+    - name: Clone HeyCart
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.heycart-repository || 'heycart/heycart' }}
+        ref: ${{ steps.version.outputs.heycart-version || inputs.heycartVersion }}
+        token: ${{ inputs.heycart-github-token }}
+
+    - name: Clone Extension
+      uses: actions/checkout@v4
+      with:
+        path: custom/plugins/${{ inputs.extensionName }}
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20.x"
+
+    - name: Install admin deps
+      shell: bash
+      if: ${{ inputs.forceInstallAdminDeps || contains(inputs.projectPath, 'administration') }}
+      run: npm ci --no-audit --no-fund --prefer-offline --prefix "src/Administration/Resources/app/administration"
+
+    - name: Install storefront deps
+      shell: bash
+      if: ${{ inputs.forceInstallStorefrontDeps || contains(inputs.projectPath, 'storefront') }}
+      run: npm ci --no-audit --no-fund --prefer-offline  --prefix "src/Storefront/Resources/app/storefront"
+
+    - name: Install Plugin Dependencies
+      shell: bash
+      run: npm install --no-audit --no-fund --prefer-offline --prefix "custom/plugins/${{ inputs.extensionName }}/${{ inputs.projectPath }}"
+
+    - name: Run Lint command
+      shell: bash
+      working-directory: custom/plugins/${{ inputs.extensionName }}/${{ inputs.projectPath }}
+      run: npm run ${{ inputs.npmLintCmd }}
